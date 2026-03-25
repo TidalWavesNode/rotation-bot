@@ -3285,20 +3285,34 @@ def print_rotation_summary(
 def main() -> None:
     print(f"[startup] network={NETWORK} mechid={MECHID} subnets={SUBNETS}", flush=True)
     print(f"[startup] polling every {POLL_SECONDS}s", flush=True)
-    print(f"[startup] default_validator={DEFAULT_VALIDATOR_NAME} hotkey={get_validator_hotkey(profile)}", flush=True)
+
     conn = db_connect(SQLITE_DB_PATH)
     subtensor = get_subtensor()
+
     selection = resolve_wallet_selection(conn)
     if selection is None and BT_WALLET_NAME:
-        selection = WalletSelection(wallet_name=BT_WALLET_NAME, wallet_path=BT_WALLET_PATH, hotkey_name=BT_HOTKEY_NAME)
+        selection = WalletSelection(
+            wallet_name=BT_WALLET_NAME,
+            wallet_path=BT_WALLET_PATH,
+            hotkey_name=BT_HOTKEY_NAME,
+        )
         save_wallet_selection(conn, selection)
-    wallet = maybe_get_wallet(selection)
+
     secrets = setup_secrets(conn)
+
     profile = run_profile_wizard(conn, selection)
     profile = profile_adjustments_from_bias(profile, load_behavior_bias(conn))
     save_profile(conn, profile)
+
+    print(
+        f"[startup] default_validator={DEFAULT_VALIDATOR_NAME} "
+        f"hotkey={get_validator_hotkey(profile)}",
+        flush=True,
+    )
+
     wallet = maybe_get_wallet(selection, profile)
     wallet_password = prompt_wallet_password_if_needed(profile, selection)
+
     if profile.live_mode and profile.execution_mode != "signals_only":
         if wallet is None:
             print(
@@ -3313,6 +3327,7 @@ def main() -> None:
                 f"@ {selection.wallet_path if selection else profile.wallet_path}",
                 flush=True,
             )
+
     print(
         f"[startup] profile={profile.name} style={profile.style} strategy={profile.strategy_mode} "
         f"mode={profile.execution_mode} live={profile.live_mode}",
@@ -3323,7 +3338,9 @@ def main() -> None:
         f"discord_enabled={bool(secrets.discord_webhook_url)}",
         flush=True,
     )
+
     test_taostats_auth(secrets)
+
     if SEND_STARTUP_MESSAGE:
         try:
             post_discord(
@@ -3334,16 +3351,22 @@ def main() -> None:
             )
         except Exception as exc:
             print(f"[warn] startup Discord post failed: {exc}", flush=True)
+
     while True:
         started = time.time()
         try:
             wallet_free_tao = best_effort_wallet_balance_tao_cached(conn, wallet, subtensor)
             print(f"[{datetime.utcnow().isoformat()}] Fetching signals...", flush=True)
-            signals, entries, holds, exits, watch, current_target = build_signals(subtensor, conn, profile, secrets)
+
+            signals, entries, holds, exits, watch, current_target = build_signals(
+                subtensor, conn, profile, secrets
+            )
+
             print(f"[{datetime.utcnow().isoformat()}] Got {len(signals)} signals", flush=True)
             print_wallet_state(profile, wallet_free_tao, conn)
             print_positions(conn)
             print_performance(conn)
+
             if signals:
                 print_rotation_summary(profile, signals, entries, holds, exits, current_target)
 
@@ -3370,9 +3393,14 @@ def main() -> None:
                 "default_validator_hotkey": get_validator_hotkey(profile),
             }
             save_runtime_status(conn, status_payload)
-            entry_decisions, exit_decisions = make_trade_decisions(conn, profile, wallet_free_tao, entries, exits)
+
+            entry_decisions, exit_decisions = make_trade_decisions(
+                conn, profile, wallet_free_tao, entries, exits
+            )
+
             if profile.live_mode and profile.execution_mode != "signals_only" and wallet is None:
                 wallet = maybe_get_wallet(selection, profile)
+
             if profile.live_mode and profile.execution_mode != "signals_only" and wallet is None:
                 print("[wallet] skipping trade execution because wallet is unavailable", flush=True)
                 status_payload["last_error"] = "wallet unavailable"
@@ -3382,20 +3410,27 @@ def main() -> None:
                 entry_results, exit_results, _session = maybe_execute_trades(
                     conn, profile, subtensor, wallet, wallet_password, entry_decisions, exit_decisions
                 )
+
             for result in entry_results + exit_results:
                 log(f"[trade] {json.dumps(result, default=str)}")
+
             changed = bool(entries or exits)
             by_netuid = {s.netuid: s for s in signals}
+
             entry_results_ok = [r for r in entry_results if r.get("ok") and not r.get("dry_run")]
             exit_results_ok = [r for r in exit_results if r.get("ok") and not r.get("dry_run")]
+
             if changed and profile.send_discord_updates:
                 summary_key = f"portfolio:{','.join(str(x) for x in current_target)}"
                 if not was_alerted_recently(conn, summary_key, 1800):
                     post_discord(
                         secrets.discord_webhook_url,
-                        build_portfolio_update(profile, current_target, signals, entries, exits, wallet_free_tao, conn),
+                        build_portfolio_update(
+                            profile, current_target, signals, entries, exits, wallet_free_tao, conn
+                        ),
                     )
                     mark_alerted(conn, summary_key)
+
             if profile.send_discord_updates:
                 for result, decision in zip(entry_results, entry_decisions):
                     if not (result.get("ok") and not result.get("dry_run")):
@@ -3404,6 +3439,7 @@ def main() -> None:
                     key = f"entry_exec:{decision.netuid}:{now_ts()}"
                     post_discord(secrets.discord_webhook_url, format_entry_executed(result, decision, sig))
                     mark_alerted(conn, key)
+
                 for result, decision in zip(exit_results, exit_decisions):
                     if not (result.get("ok") and not result.get("dry_run")):
                         continue
@@ -3411,6 +3447,7 @@ def main() -> None:
                     key = f"exit_exec:{decision.netuid}:{now_ts()}"
                     post_discord(secrets.discord_webhook_url, format_exit_executed(result, decision, sig))
                     mark_alerted(conn, key)
+
         except KeyboardInterrupt:
             print("Exiting.", flush=True)
             break
@@ -3425,8 +3462,11 @@ def main() -> None:
                     )
                 except Exception:
                     pass
+
         elapsed = time.time() - started
         sleep_for = max(1, POLL_SECONDS - int(elapsed))
         time.sleep(sleep_for)
+
+
 if __name__ == "__main__":
     main()
